@@ -1,11 +1,18 @@
-use std::io::{Read};
-use binrw::io::NoSeek;
+#![no_std]
+
+use binrw::error::Error as RwError;
+use binrw::io::{NoSeek, Read, Seek};
 use binrw::prelude::*;
+use binrw::{Endian, VecArgs};
 use bytemuck::{cast, cast_slice};
 
 #[derive(Debug)]
 pub enum Error {
-    InvalidDataLength { expected: u16, got: u16, ty: MessageType },
+    InvalidDataLength {
+        expected: u16,
+        got: u16,
+        ty: MessageType,
+    },
 }
 
 #[derive(Debug, Clone, BinRead, Copy)]
@@ -34,19 +41,61 @@ impl MessageType {
 #[allow(dead_code)]
 struct Frame {
     id: u16,
+    #[br(assert(length <= 16))]
     length: u16,
     ty: MessageType,
     header_checksum: u8,
     #[br(count = length)]
-    data: Vec<u8>,
+    data: FrameData<16>,
     data_checksum: u8,
 }
 
+#[derive(Debug, Clone)]
+struct FrameData<const N: usize> {
+    data: [u8; N],
+    len: usize,
+}
 
+impl<const N: usize> FrameData<N> {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+}
+
+impl<const N: usize> AsRef<[u8]> for FrameData<N> {
+    fn as_ref(&self) -> &[u8] {
+        &self.data[0..self.len]
+    }
+}
+
+impl<const N: usize> BinRead for FrameData<N> {
+    type Args<'a> = VecArgs<u8>;
+
+    fn read_options<R: Read + Seek>(
+        reader: &mut R,
+        _endian: Endian,
+        args: Self::Args<'_>,
+    ) -> BinResult<Self> {
+        if args.count > N {
+            return Err(RwError::AssertFail {
+                pos: 0,
+                message: "".into(),
+            });
+        }
+        let mut data = [0u8; N];
+        for byte in data.iter_mut().take(args.count) {
+            *byte = reader.read_be()?;
+        }
+        Ok(FrameData {
+            data,
+            len: args.count,
+        })
+    }
+}
 
 impl Frame {
     fn body(&self) -> Result<MessageBody, Error> {
-        let numbers = cast_slice::<_, u32>(&self.data);
+        let numbers = cast_slice::<_, u32>(self.data.as_ref());
 
         match (self.ty, self.data.len()) {
             (MessageType::Phase, 12) => {
@@ -56,23 +105,21 @@ impl Frame {
             (MessageType::Respiratory, 4) => {
                 Ok(MessageBody::Respiratory(f32::from_bits(numbers[0])))
             }
-            (MessageType::Heartbeat, 4) => {
-                Ok(MessageBody::Heartbeat(f32::from_bits(numbers[0])))
-            }
+            (MessageType::Heartbeat, 4) => Ok(MessageBody::Heartbeat(f32::from_bits(numbers[0]))),
             (MessageType::Distance, 8) => {
-                let distance = if numbers[0] == 1 { f32::from_bits(numbers[1]) } else { 0.0 };
+                let distance = if numbers[0] == 1 {
+                    f32::from_bits(numbers[1])
+                } else {
+                    0.0
+                };
                 Ok(MessageBody::Distance(Some(distance)))
             }
-            (MessageType::Distance, 4) => {
-                Ok(MessageBody::Distance(None))
-            }
-            _ => {
-                Err(Error::InvalidDataLength {
-                    got: self.data.len() as u16,
-                    expected: self.ty.expected_length(),
-                    ty: self.ty,
-                })
-            }
+            (MessageType::Distance, 4) => Ok(MessageBody::Distance(None)),
+            _ => Err(Error::InvalidDataLength {
+                got: self.data.len() as u16,
+                expected: self.ty.expected_length(),
+                ty: self.ty,
+            }),
         }
     }
 }
@@ -86,13 +133,13 @@ pub enum MessageBody {
 }
 
 pub struct MessageStream<R> {
-    reader:  NoSeek<R>,
+    reader: NoSeek<R>,
 }
 
 impl<R: Read> MessageStream<R> {
     pub fn new(reader: R) -> Self {
-        Self{
-            reader:NoSeek::new(reader)
+        Self {
+            reader: NoSeek::new(reader),
         }
     }
 
@@ -101,12 +148,11 @@ impl<R: Read> MessageStream<R> {
         loop {
             self.reader.read(&mut byte).ok();
             if byte[0] == 0x01 {
-                return Frame::read(&mut self.reader)
+                return Frame::read(&mut self.reader);
             }
         }
     }
 }
-
 
 impl<R: Read> Iterator for MessageStream<R> {
     type Item = MessageBody;
