@@ -2,6 +2,7 @@
 
 use bytemuck::{cast, cast_slice};
 use embedded_io::{Error, Read, ReadExactError};
+use embedded_io_async::Read as AsyncRead;
 use num_enum::TryFromPrimitive;
 
 #[derive(Debug)]
@@ -69,11 +70,8 @@ struct FrameHeader {
 }
 
 impl FrameHeader {
-    pub fn read<R: Read>(mut reader: R) -> Result<Self, LdError<R::Error>> {
-        let mut header_bytes = [0; 7];
-        reader.read_exact(&mut header_bytes)?;
-
-        let ty = u16::from_be_bytes([header_bytes[4], header_bytes[5]]);
+    pub fn parse<E>(data: [u8; 7]) -> Result<Self, LdError<E>> {
+        let ty = u16::from_be_bytes([data[4], data[5]]);
         let ty = MessageType::try_from(ty).map_err(|e| LdError::InvalidMessageType(e.number))?;
 
         // let checksum = checksum(&header_bytes);
@@ -86,10 +84,24 @@ impl FrameHeader {
         // }
 
         Ok(FrameHeader {
-            _id: u16::from_be_bytes([header_bytes[0], header_bytes[1]]),
-            length: u16::from_be_bytes([header_bytes[2], header_bytes[3]]),
+            _id: u16::from_be_bytes([data[0], data[1]]),
+            length: u16::from_be_bytes([data[2], data[3]]),
             ty,
         })
+    }
+
+    pub fn read<R: Read>(mut reader: R) -> Result<Self, LdError<R::Error>> {
+        let mut header_bytes = [0; 7];
+        reader.read_exact(&mut header_bytes)?;
+
+        Self::parse(header_bytes)
+    }
+
+    pub async fn read_async<R: AsyncRead>(mut reader: R) -> Result<Self, LdError<R::Error>> {
+        let mut header_bytes = [0; 7];
+        reader.read_exact(&mut header_bytes).await?;
+
+        Self::parse(header_bytes)
     }
 }
 
@@ -125,6 +137,31 @@ impl Frame {
 
         Ok(Frame { header, data })
     }
+
+    pub async fn read_async<R: AsyncRead>(mut reader: R) -> Result<Self, LdError<R::Error>> {
+        let mut magic = [0];
+        reader.read_exact(&mut magic).await?;
+        if magic[0] != 1 {
+            return Err(LdError::InvalidFrameStart(magic[0]));
+        }
+
+        let header = FrameHeader::read_async(&mut reader).await?;
+        let data = FrameData::read_async(&mut reader, &header).await?;
+        let mut data_checksum = [0];
+        reader.read_exact(&mut data_checksum).await?;
+        let data_checksum = data_checksum[0];
+
+        let calculated_checksum = checksum(data.as_ref());
+        if data_checksum != calculated_checksum {
+            return Err(LdError::InvalidChecksum {
+                ty: "body",
+                got: calculated_checksum,
+                expected: data_checksum,
+            });
+        };
+
+        Ok(Frame { header, data })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -139,17 +176,41 @@ impl<const N: usize> FrameData<N> {
         self.len
     }
 
-    pub fn read<R: Read>(mut reader: R, header: &FrameHeader) -> Result<Self, LdError<R::Error>> {
+    fn validate<E>(header: &FrameHeader) -> Result<(), LdError<E>> {
         if header.length as usize > N || header.length != header.ty.expected_length() {
             return Err(LdError::InvalidDataLength {
                 got: header.length,
                 expected: header.ty.expected_length(),
                 ty: header.ty,
             });
+        } else {
+            Ok(())
         }
+    }
+
+    pub fn read<R: Read>(mut reader: R, header: &FrameHeader) -> Result<Self, LdError<R::Error>> {
+        Self::validate(header)?;
 
         let mut data = [0u8; N];
         reader.read_exact(&mut data[0..header.length as usize])?;
+
+        Ok(FrameData {
+            _align: 0,
+            data,
+            len: header.length,
+        })
+    }
+
+    pub async fn read_async<R: AsyncRead>(
+        mut reader: R,
+        header: &FrameHeader,
+    ) -> Result<Self, LdError<R::Error>> {
+        Self::validate(header)?;
+
+        let mut data = [0u8; N];
+        reader
+            .read_exact(&mut data[0..header.length as usize])
+            .await?;
 
         Ok(FrameData {
             _align: 0,
@@ -228,6 +289,25 @@ impl<R: Read> Iterator for MessageStream<R> {
         };
 
         Some(frame.body::<R::Error>())
+    }
+}
+
+pub struct AsyncMessageStream<R> {
+    reader: R,
+}
+
+impl<R: AsyncRead> AsyncMessageStream<R> {
+    pub fn new(reader: R) -> Self {
+        Self { reader }
+    }
+
+    async fn read(&mut self) -> Result<Frame, LdError<R::Error>> {
+        Frame::read_async(&mut self.reader).await
+    }
+
+    pub async fn next(&mut self) -> Result<MessageBody, LdError<R::Error>> {
+        let frame = self.read().await?;
+        frame.body()
     }
 }
 
