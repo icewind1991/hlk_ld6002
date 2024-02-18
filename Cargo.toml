@@ -1,0 +1,14 @@
+[package]
+name = "hlk_ld6002"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytemuck = { version = "1.14.0", features = ["derive"] }
+binrw = { version = "0.13.3" }
+
+[dev-dependencies]
+serialport = "4.2.2"
+termion = "2.0.3"
