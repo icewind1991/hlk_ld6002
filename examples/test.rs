@@ -1,4 +1,4 @@
-use embedded_io::{ErrorType, Read, ReadExactError};
+use embedded_io_adapters::std::FromStd;
 use hlk_ld6002::{Data, MessageStream};
 use serialport::ClearBuffer;
 use std::env::args;
@@ -12,7 +12,7 @@ fn main() {
         .expect("Failed to open port");
     port.clear(ClearBuffer::All).expect("clear");
 
-    let mut messages = MessageStream::new(ReadAdapter(port));
+    let mut messages = MessageStream::new(FromStd::new(port));
 
     let mut data = Data::default();
 
@@ -30,21 +30,5 @@ fn main() {
                 }
             }
         }
-    }
-}
-
-struct ReadAdapter<R>(R);
-
-impl<R: std::io::Read> ErrorType for ReadAdapter<R> {
-    type Error = std::io::Error;
-}
-
-impl<R: std::io::Read> Read for ReadAdapter<R> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.0.read(buf)
-    }
-
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), ReadExactError<Self::Error>> {
-        self.0.read_exact(buf).map_err(ReadExactError::Other)
     }
 }

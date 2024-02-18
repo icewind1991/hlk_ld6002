@@ -10,6 +10,6 @@ embedded-io = "0.6.1"
 num_enum = { version = "0.7.2", default-features = false }
 
 [dev-dependencies]
-embedded-io = { version = "0.6.1", features = ["std"] }
+embedded-io-adapters = { version = "0.6.1", features = ["std"] }
 serialport = "4.3.0"
 termion = "3.0.0"
