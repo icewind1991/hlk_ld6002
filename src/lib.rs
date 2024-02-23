@@ -1,7 +1,6 @@
 #![no_std]
 
 use bytemuck::{cast, cast_slice};
-use core::sync::atomic::{AtomicU32, Ordering};
 use embedded_io::{Error, Read, ReadExactError};
 use embedded_io_async::Read as AsyncRead;
 use num_enum::TryFromPrimitive;
@@ -333,42 +332,6 @@ impl Data {
             }
             _ => {}
         }
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct AtomicData {
-    respiratory: AtomicU32,
-    distance: AtomicU32,
-    heartbeat: AtomicU32,
-}
-
-impl AtomicData {
-    pub fn update(&self, message: MessageBody) {
-        match message {
-            MessageBody::Respiratory(rate) => {
-                self.respiratory.store(rate.to_bits(), Ordering::SeqCst);
-            }
-            MessageBody::Distance(Some(distance)) => {
-                self.distance.store(distance.to_bits(), Ordering::SeqCst);
-            }
-            MessageBody::Heartbeat(rate) => {
-                self.heartbeat.store(rate.to_bits(), Ordering::SeqCst);
-            }
-            _ => {}
-        }
-    }
-
-    pub fn respiratory(&self) -> f32 {
-        f32::from_bits(self.respiratory.load(Ordering::Relaxed))
-    }
-
-    pub fn distance(&self) -> f32 {
-        f32::from_bits(self.distance.load(Ordering::Relaxed))
-    }
-
-    pub fn heartbeat(&self) -> f32 {
-        f32::from_bits(self.heartbeat.load(Ordering::Relaxed))
     }
 }
 

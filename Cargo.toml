@@ -3,6 +3,7 @@ name = "hlk_ld6002"
 version = "0.1.0"
 edition = "2021"
 description = "A library for interfacing with the HLK-LD6002 respiratory and heartbeat radar module"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 bytemuck = { version = "1.14.3", features = ["derive"] }
