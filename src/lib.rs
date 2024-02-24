@@ -1,25 +1,57 @@
 #![no_std]
 
+//! A library for community with [HLK-LD6002](https://www.hlktech.net/index.php?id=1180) radar respiratory and heartbeat sensors.
+//!
+//! ## Usage
+//!
+//! ```rust,no_run
+//! use embedded_io_adapters::std::FromStd;
+//! use hlk_ld6002::{Data, MessageStream};
+//! use serialport::ClearBuffer;
+//! use std::time::Duration;
+//!
+//! let port = serialport::new("/dev/ttyUSB0", 1_382_400)
+//!     .timeout(Duration::from_millis(50))
+//!     .open()
+//!     .expect("Failed to open port");
+//!
+//! let mut messages = MessageStream::new(FromStd::new(port));
+//!
+//! let mut data = Data::default();
+//!
+//! for message in messages.flatten() {
+//!     data.update(message);
+//!     println!("{data:?}");
+//! }
+//! ```
+
 use bytemuck::{cast, cast_slice};
 use embedded_io::{Error, Read, ReadExactError};
 use embedded_io_async::Read as AsyncRead;
 use num_enum::TryFromPrimitive;
 
+/// Error type for reading data from the sensor
 #[derive(Debug)]
 pub enum LdError<E> {
+    /// The message received from the sensor had an unknown message type
     InvalidMessageType(u16),
+    /// The message received from the sensor had an invalid length for the message type
     InvalidDataLength {
         expected: u16,
         got: u16,
         ty: MessageType,
     },
+    /// The message received from the sensor had an invalid checksum
     InvalidChecksum {
         ty: &'static str,
         got: u8,
         expected: u8,
     },
+    /// The data read from the sensor didn't start as expected
     InvalidFrameStart(u8),
+    /// Unexpected end of data
     Eof,
+    /// Error while reading from the serial device
     Read(E),
 }
 
@@ -32,6 +64,7 @@ impl<E> From<ReadExactError<E>> for LdError<E> {
     }
 }
 
+/// Message type sent by the sensor
 #[derive(Debug, Clone, Copy, TryFromPrimitive)]
 #[repr(u16)]
 pub enum MessageType {
@@ -105,6 +138,7 @@ impl FrameHeader {
     }
 }
 
+/// A frame of data received from the sensor
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 struct Frame {
@@ -178,11 +212,11 @@ impl<const N: usize> FrameData<N> {
 
     fn validate<E>(header: &FrameHeader) -> Result<(), LdError<E>> {
         if header.length as usize > N || header.length != header.ty.expected_length() {
-            return Err(LdError::InvalidDataLength {
+            Err(LdError::InvalidDataLength {
                 got: header.length,
                 expected: header.ty.expected_length(),
                 ty: header.ty,
-            });
+            })
         } else {
             Ok(())
         }
@@ -227,6 +261,7 @@ impl<const N: usize> AsRef<[u8]> for FrameData<N> {
 }
 
 impl Frame {
+    /// Decode the body of the message according to the message type
     fn body<E: Error>(&self) -> Result<MessageBody, LdError<E>> {
         let numbers = cast_slice::<_, u32>(self.data.as_ref());
 
@@ -257,6 +292,7 @@ impl Frame {
     }
 }
 
+/// The decoded message from the sensor
 #[derive(Clone, Debug)]
 pub enum MessageBody {
     Phase([f32; 3]),
@@ -265,6 +301,7 @@ pub enum MessageBody {
     Distance(Option<f32>),
 }
 
+/// A wrapper around [`Read`](embedded-io::Read) for reading messages from the sensor
 pub struct MessageStream<R> {
     reader: R,
 }
@@ -292,6 +329,7 @@ impl<R: Read> Iterator for MessageStream<R> {
     }
 }
 
+/// A wrapper around [`AsyncRead`](embedded-io-async::AsyncRead) for reading messages from the sensor
 pub struct AsyncMessageStream<R> {
     reader: R,
 }
@@ -305,12 +343,14 @@ impl<R: AsyncRead> AsyncMessageStream<R> {
         Frame::read_async(&mut self.reader).await
     }
 
+    /// Read the next message from the sensor
     pub async fn next(&mut self) -> Result<MessageBody, LdError<R::Error>> {
         let frame = self.read().await?;
         frame.body()
     }
 }
 
+/// A helper struct to store the received data
 #[derive(Default, Debug, Copy, Clone)]
 pub struct Data {
     pub respiratory: f32,
