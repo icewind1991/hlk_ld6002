@@ -1,3 +1,5 @@
+# Moved to https://codeberg.org/icewind/hlk_ld6002
+
 # HLK-LD6002
 
 A library for community with [HLK-LD6002](https://www.hlktech.net/index.php?id=1180) radar respiratory and heartbeat sensors.
